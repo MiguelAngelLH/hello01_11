@@ -1,91 +1,106 @@
-from fastapi import FastAPI
+import fastapi
+import sqlite3
+from fastapi import applications, HTTPException
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-import sqlite3  # Importa la biblioteca sqlite3
-from pydantic import BaseModel  # Importa la biblioteca pydantic
-import os
-from fastapi.staticfiles import StaticFiles
-import mysql.connector
 
-app = FastAPI()
+# Conexión a la base de datos SQLite
+conn = sqlite3.connect('contactos.db')
+cursor = conn.cursor()
 
+# Crear tabla e insertar datos
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contactos';")
+table_exists = cursor.fetchone()
+if not table_exists:
+    cursor.executescript('''
+        CREATE TABLE contactos (
+        email VARCHAR PRIMARY KEY,
+        nombre TEXT,
+        telefono TEXT
+    );
 
+    INSERT INTO contactos (email, nombre, telefono)
+    VALUES ("juan@example.com", "Juan Pérez", "555-123-4567");
 
-# Configuración de CORS para permitir acceso desde el puerto 8080
-mysql_conn = mysql.connector.connect(
-    host="cxmgkzhk95kfgbq4.cbetxkdyhwsb.us-east-1.rds.amazonaws.com",  # Cambia esto por la URL o dirección IP de tu servidor MySQL
-    user="mvvs08b6ffqn1u3k",  # Usuario de MySQL
-    password="bs57pdwk1l1l7dlm",  # Contraseña de MySQL
-    port="3306",
-    database="ynbydh91h8238fjo" # Nombre de la base de datos MySQL
-   
+    INSERT INTO contactos (email, nombre, telefono)
+    VALUES ("maria@example.com", "María García", "555-678-9012");
+''')
+
+conn.commit()
+conn.close()
+
+# Conexión a la base de datos SQLite
+conn = sqlite3.connect('contactos.db')
+
+app = fastapi.FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8080"],  # Reemplaza con la URL de tu aplicación frontend
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-
-
-db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dbcontactos', 'contactos.db')
-sql_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dbcontactos', 'contactos.sql')
-
-if not os.path.exists(db_path):
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        with open(sql_file_path, 'r') as sql_file:
-            cursor.executescript(sql_file.read())
 
 class Contacto(BaseModel):
     email: str
     nombre: str
     telefono: str
 
-# Rutas para las operaciones CRUD
 @app.post("/contactos")
 async def crear_contacto(contacto: Contacto):
     """Crea un nuevo contacto."""
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO contactos (email, nombre, telefono) VALUES (?, ?, ?)',
-                       (contacto.email, contacto.nombre, contacto.telefono))
-        conn.commit()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO contactos (email, nombre, telefono) VALUES (?, ?, ?)',
+                   (contacto.email, contacto.nombre, contacto.telefono))
+    conn.commit()
     return contacto
 
 @app.get("/contactos")
 async def obtener_contactos():
     """Obtiene todos los contactos."""
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM contactos')
-        response = []
-        for row in cursor.fetchall():
-            contacto = Contacto(email=row[0], nombre=row[1], telefono=row[2])
-            response.append(contacto)
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM contactos')
+    response = []
+    for row in cursor:
+        contacto = Contacto(email=row[0], nombre=row[1], telefono=row[2])
+        response.append(contacto)
     return response
 
 @app.get("/contactos/{email}")
 async def obtener_contacto(email: str):
     """Obtiene un contacto por su email."""
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM contactos WHERE email = ?', (email,))
-        row = cursor.fetchone()
-        if row:
-            contacto = Contacto(email=row[0], nombre=row[1], telefono=row[2])
-            return contacto
-        return None
-
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM contactos WHERE email = ?', (email,))
+    row = cursor.fetchone()
+    if row is not None:
+        contacto = Contacto(email=row[0], nombre=row[1], telefono=row[2])
+        return contacto
+    else:
+        return {"error": "Contacto no encontrado"}
+    
 @app.put("/contactos/{email}")
 async def actualizar_contacto(email: str, contacto: Contacto):
-    """Actualiza un contacto."""
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute('UPDATE contactos SET nombre = ?, telefono = ? WHERE email = ?',
-                       (contacto.nombre, contacto.telefono, email))
-        conn.commit()
-    return contacto
+    """Actualiza un contacto por su email."""
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM contactos WHERE email = ?', (email,))
+    row = cursor.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Contacto no encontrado")
+
+    cursor.execute('UPDATE contactos SET email = ?, nombre = ?, telefono = ? WHERE email = ?',
+                   (contacto.email, contacto.nombre, contacto.telefono, email))
+    conn.commit()
+    return {"mensaje": "Contacto actualizado correctamente"}
+
 
 @app.delete("/contactos/{email}")
 async def eliminar_contacto(email: str):
     """Elimina un contacto."""
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM contactos WHERE email = ?', (email,))
-        conn.commit()
-    return {"message": "Contacto eliminado correctamente"}
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM contactos WHERE email = ?', (email,))
+    conn.commit()
+    return {"mensaje": "Contacto eliminado exitosamente"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
